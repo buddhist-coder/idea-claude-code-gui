@@ -340,6 +340,7 @@
     "added": "已添加",
     "linkCopied": "链接已复制，请到浏览器打开",
     "copyFailed": "复制失败，请手动复制",
+    "noTools": "暂无可用工具信息",
     "presets": {
       "fetch": "Web 内容获取工具，可以抓取网页内容",
       "time": "时间和时区工具",

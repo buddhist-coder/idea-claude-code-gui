@@ -332,6 +332,7 @@
     "added": "जोड़ा गया",
     "linkCopied": "लिंक कॉपी किया गया, कृपया ब्राउज़र में खोलें",
     "copyFailed": "कॉपी विफल, कृपया मैन्युअल रूप से कॉपी करें",
+    "noTools": "कोई उपकरण उपलब्ध नहीं",
     "presets": {
       "fetch": "Web content fetching tool for scraping web pages",
       "time": "Time and timezone utilities",

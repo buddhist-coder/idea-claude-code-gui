@@ -332,6 +332,7 @@
     "added": "Añadido",
     "linkCopied": "Enlace copiado, por favor abre en el navegador",
     "copyFailed": "Error al copiar, por favor copia manualmente",
+    "noTools": "No hay herramientas disponibles",
     "presets": {
       "fetch": "Web content fetching tool for scraping web pages",
       "time": "Time and timezone utilities",

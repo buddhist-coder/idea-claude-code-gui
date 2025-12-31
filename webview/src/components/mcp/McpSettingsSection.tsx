@@ -55,16 +55,30 @@ export function McpSettingsSection() {
 
   // 初始化
   useEffect(() => {
-    // 注册回调
+    // 注册回调 - 获取服务器列表
     window.updateMcpServers = (jsonStr: string) => {
       try {
         const serverList: McpServer[] = JSON.parse(jsonStr);
         setServers(serverList);
         setLoading(false);
         console.log('[McpSettings] Loaded servers:', serverList);
+
+        // 加载服务器后，异步获取工具信息
+        loadMcpTools();
       } catch (error) {
         console.error('[McpSettings] Failed to parse servers:', error);
         setLoading(false);
+      }
+    };
+
+    // 注册回调 - 获取带工具信息的服务器列表
+    window.updateMcpServersWithTools = (jsonStr: string) => {
+      try {
+        const serverList: McpServer[] = JSON.parse(jsonStr);
+        setServers(serverList);
+        console.log('[McpSettings] Loaded servers with tools:', serverList);
+      } catch (error) {
+        console.error('[McpSettings] Failed to parse servers with tools:', error);
       }
     };
 
@@ -81,6 +95,7 @@ export function McpSettingsSection() {
 
     return () => {
       window.updateMcpServers = undefined;
+      window.updateMcpServersWithTools = undefined;
       document.removeEventListener('click', handleClickOutside);
     };
   }, []);
@@ -88,6 +103,11 @@ export function McpSettingsSection() {
   const loadServers = () => {
     setLoading(true);
     sendToJava('get_mcp_servers', {});
+  };
+
+  const loadMcpTools = () => {
+    // 异步获取MCP工具信息，不阻塞UI
+    sendToJava('get_mcp_tools', {});
   };
 
   const getIconColor = (serverId: string): string => {
@@ -309,50 +329,88 @@ export function McpSettingsSection() {
               <div className="card-header" onClick={() => toggleExpand(server.id)}>
                 <div className="header-left-section">
                   <span className={`expand-icon codicon ${expandedServers.has(server.id) ? 'codicon-chevron-down' : 'codicon-chevron-right'}`}></span>
+                  {/* 状态指示器 */}
+                  <span className={`status-dot ${isServerEnabled(server) ? 'online' : 'offline'}`}></span>
                   <div className="server-icon" style={{ background: getIconColor(server.id) }}>
                     {getServerInitial(server)}
                   </div>
                   <span className="server-name">{server.name || server.id}</span>
+                  {/* 工具数量显示 */}
+                  {server.tools && server.tools.length > 0 && (
+                    <span className="tools-count">({server.tools.length}) tools</span>
+                  )}
+                  {/* 命令信息 */}
+                  {server.server.command && (
+                    <span className="server-command">
+                      {server.server.command} {(server.server.args || []).slice(0, 3).join(' ')}
+                      {(server.server.args || []).length > 3 ? '...' : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="header-right-section" onClick={(e) => e.stopPropagation()}>
-                  {/* TODO: 启用/禁用开关 - 暂时隐藏，后续再加回 */}
-                  {/* <label className="toggle-switch">
-                    <input
-                      type="checkbox"
-                      checked={isServerEnabled(server)}
-                      onChange={(e) => handleToggleServer(server, e.target.checked)}
-                    />
-                    <span className="toggle-slider"></span>
-                  </label> */}
+                  {/* 更多操作按钮 */}
+                  <button
+                    className="more-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEdit(server);
+                    }}
+                    title={t('mcp.edit')}
+                  >
+                    <span className="codicon codicon-ellipsis"></span>
+                  </button>
                 </div>
               </div>
 
               {/* 展开内容 */}
               {expandedServers.has(server.id) && (
                 <div className="card-content">
-                  {/* 服务器信息 */}
-                  <div className="info-section">
-                    {server.description && (
-                      <div className="info-row">
-                        <span className="info-label">{t('mcp.description')}:</span>
-                        <span className="info-value">{server.description}</span>
+                  {/* 工具列表 */}
+                  {server.tools && server.tools.length > 0 && (
+                    <div className="tools-section">
+                      {server.tools.map((tool, index) => (
+                        <div key={tool.name || index} className="tool-item">
+                          <span className="tool-status-dot"></span>
+                          <div className="tool-info">
+                            <span className="tool-name">{tool.name}</span>
+                            {tool.description && (
+                              <p className="tool-description" title={tool.description}>{tool.description}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 无工具时显示服务器信息 */}
+                  {(!server.tools || server.tools.length === 0) && (
+                    <div className="info-section">
+                      {server.description && (
+                        <div className="info-row">
+                          <span className="info-label">{t('mcp.description')}:</span>
+                          <span className="info-value">{server.description}</span>
+                        </div>
+                      )}
+                      {server.server.command && (
+                        <div className="info-row">
+                          <span className="info-label">{t('mcp.command')}:</span>
+                          <code className="info-value command">
+                            {server.server.command} {(server.server.args || []).join(' ')}
+                          </code>
+                        </div>
+                      )}
+                      {server.server.url && (
+                        <div className="info-row">
+                          <span className="info-label">{t('mcp.url')}:</span>
+                          <code className="info-value command">{server.server.url}</code>
+                        </div>
+                      )}
+                      <div className="no-tools-hint">
+                        <span className="codicon codicon-info"></span>
+                        <span>{t('mcp.noTools') || '暂无可用工具信息'}</span>
                       </div>
-                    )}
-                    {server.server.command && (
-                      <div className="info-row">
-                        <span className="info-label">{t('mcp.command')}:</span>
-                        <code className="info-value command">
-                          {server.server.command} {(server.server.args || []).join(' ')}
-                        </code>
-                      </div>
-                    )}
-                    {server.server.url && (
-                      <div className="info-row">
-                        <span className="info-label">{t('mcp.url')}:</span>
-                        <code className="info-value command">{server.server.url}</code>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   {/* 标签 */}
                   {server.tags && server.tags.length > 0 && (

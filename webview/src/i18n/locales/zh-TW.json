@@ -332,6 +332,7 @@
     "added": "已新增",
     "linkCopied": "連結已複製，請到瀏覽器開啟",
     "copyFailed": "複製失敗，請手動複製",
+    "noTools": "暫無可用工具資訊",
     "presets": {
       "fetch": "Web content fetching tool for scraping web pages",
       "time": "Time and timezone utilities",

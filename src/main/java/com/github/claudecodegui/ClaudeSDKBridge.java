@@ -1132,6 +1132,156 @@ public class ClaudeSDKBridge {
     }
 
     // ============================================================================
+    // MCP 工具获取
+    // ============================================================================
+
+    private static final String MCP_TOOLS_CHANNEL_ID = "__mcp_tools__";
+
+    /**
+     * 获取MCP服务器的工具列表.
+     * 通过初始化SDK获取所有MCP服务器及其提供的工具信息
+     */
+    public CompletableFuture<List<JsonObject>> getMcpTools(String cwd) {
+        return CompletableFuture.supplyAsync(() -> {
+            Process process = null;
+            long startTime = System.currentTimeMillis();
+            LOG.info("[McpTools] Starting getMcpTools, cwd=" + cwd);
+
+            try {
+                String node = nodeDetector.findNodeExecutable();
+
+                // 构建 stdin 输入 JSON
+                JsonObject stdinInput = new JsonObject();
+                stdinInput.addProperty("cwd", cwd != null ? cwd : "");
+                String stdinJson = gson.toJson(stdinInput);
+
+                List<String> command = new ArrayList<>();
+                command.add(node);
+                File bridgeDir = directoryResolver.findSdkDir();
+                command.add(new File(bridgeDir, CHANNEL_SCRIPT).getAbsolutePath());
+                command.add("claude");  // provider
+                command.add("getMcpTools");
+
+                ProcessBuilder pb = new ProcessBuilder(command);
+                File workDir = bridgeDir;
+                pb.directory(workDir);
+                pb.redirectErrorStream(true);
+                envConfigurator.updateProcessEnvironment(pb, node);
+                pb.environment().put("CLAUDE_USE_STDIN", "true");
+
+                process = pb.start();
+                processManager.registerProcess(MCP_TOOLS_CHANNEL_ID, process);
+                final Process finalProcess = process;
+
+                // 通过 stdin 写入参数
+                try (java.io.OutputStream stdin = process.getOutputStream()) {
+                    stdin.write(stdinJson.getBytes(StandardCharsets.UTF_8));
+                    stdin.flush();
+                    LOG.debug("[McpTools] Wrote stdin: " + stdinJson);
+                } catch (Exception e) {
+                    LOG.warn("[McpTools] Failed to write stdin: " + e.getMessage());
+                }
+
+                // 使用标志变量，一旦找到数据就立即退出
+                final boolean[] found = {false};
+                final String[] mcpToolsJson = {null};
+                final StringBuilder output = new StringBuilder();
+
+                Thread readerThread = new Thread(() -> {
+                    try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(finalProcess.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while (!found[0] && (line = reader.readLine()) != null) {
+                            output.append(line).append("\n");
+                            LOG.debug("[McpTools] Read line: " + line.substring(0, Math.min(100, line.length())));
+
+                            if (line.startsWith("[MCP_TOOLS]")) {
+                                mcpToolsJson[0] = line.substring("[MCP_TOOLS]".length()).trim();
+                                found[0] = true;  // 设置标志，立即停止读取
+                                LOG.info("[McpTools] Found MCP_TOOLS marker, data length=" + mcpToolsJson[0].length());
+                                break;  // 立即退出循环
+                            }
+                        }
+                    } catch (Exception e) {
+                        LOG.debug("[McpTools] Reader thread exception: " + e.getMessage());
+                    }
+                });
+                readerThread.start();
+
+                // 轮询等待，最多 30 秒（MCP服务器初始化可能需要更长时间）
+                long deadline = System.currentTimeMillis() + 30000;
+                while (!found[0] && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(100);  // 每 100ms 检查一次
+                }
+
+                long elapsed = System.currentTimeMillis() - startTime;
+
+                // 无论是否找到数据，都立即终止进程
+                if (process.isAlive()) {
+                    PlatformUtils.terminateProcess(process);
+                    LOG.debug("[McpTools] Process forcibly destroyed after " + elapsed + "ms");
+                }
+
+                // 解析结果
+                List<JsonObject> mcpServers = new ArrayList<>();
+
+                if (found[0] && mcpToolsJson[0] != null && !mcpToolsJson[0].isEmpty()) {
+                    try {
+                        JsonArray serversArray = gson.fromJson(mcpToolsJson[0], JsonArray.class);
+                        for (var server : serversArray) {
+                            mcpServers.add(server.getAsJsonObject());
+                        }
+                        LOG.info("[McpTools] Successfully parsed " + mcpServers.size() + " MCP servers in " + elapsed + "ms");
+                        return mcpServers;
+                    } catch (Exception e) {
+                        LOG.warn("[McpTools] Failed to parse MCP tools JSON: " + e.getMessage());
+                    }
+                } else {
+                    LOG.warn("[McpTools] No MCP tools found after " + elapsed + "ms, found=" + found[0]);
+                }
+
+                // 回退到解析最终 JSON 输出
+                String outputStr = output.toString().trim();
+                int jsonStart = outputStr.lastIndexOf("{");
+                if (jsonStart != -1) {
+                    String jsonStr = outputStr.substring(jsonStart);
+                    try {
+                        JsonObject jsonResult = gson.fromJson(jsonStr, JsonObject.class);
+                        if (jsonResult.has("success") && jsonResult.get("success").getAsBoolean()) {
+                            if (jsonResult.has("mcpServers")) {
+                                JsonArray serversArray = jsonResult.getAsJsonArray("mcpServers");
+                                for (var server : serversArray) {
+                                    mcpServers.add(server.getAsJsonObject());
+                                }
+                                LOG.info("[McpTools] Fallback: parsed " + mcpServers.size() + " MCP servers from JSON");
+                            }
+                        }
+                    } catch (Exception e) {
+                        LOG.debug("[McpTools] Fallback JSON parse failed: " + e.getMessage());
+                    }
+                }
+
+                return mcpServers;
+
+            } catch (Exception e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                LOG.error("[McpTools] Exception after " + elapsed + "ms: " + e.getMessage());
+                return new ArrayList<>();
+            } finally {
+                if (process != null) {
+                    try {
+                        if (process.isAlive()) {
+                            PlatformUtils.terminateProcess(process);
+                        }
+                    } finally {
+                        processManager.unregisterProcess(MCP_TOOLS_CHANNEL_ID, process);
+                    }
+                }
+            }
+        });
+    }
+
+    // ============================================================================
     // 工具方法
     // ============================================================================
 

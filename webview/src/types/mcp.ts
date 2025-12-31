@@ -68,6 +68,10 @@ export interface McpServer {
   docs?: string;
   /** 是否启用 (旧格式兼容) */
   enabled?: boolean;
+  /** 服务器状态 */
+  status?: McpServerStatus;
+  /** 该MCP提供的工具列表 */
+  tools?: McpTool[];
   /** 允许扩展字段 */
   [key: string]: any;
 }
@@ -123,6 +127,16 @@ export interface McpPreset {
  * MCP 服务器状态
  */
 export type McpServerStatus = 'connected' | 'checking' | 'error' | 'unknown';
+
+/**
+ * MCP 工具定义
+ */
+export interface McpTool {
+  /** 工具名称 */
+  name: string;
+  /** 工具描述 */
+  description?: string;
+}
 
 /**
  * MCP 服务器验证结果

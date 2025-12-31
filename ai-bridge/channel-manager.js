@@ -33,12 +33,13 @@ import { readStdinData } from './utils/stdin-utils.js';
 
 // Claude 服务
 console.log('[STARTUP] 正在加载 Claude 服务模块...');
-let claudeSendMessage, claudeSendMessageWithAttachments, claudeGetSlashCommands, claudeGetSessionMessages;
+let claudeSendMessage, claudeSendMessageWithAttachments, claudeGetSlashCommands, claudeGetMcpTools, claudeGetSessionMessages;
 try {
   const messageService = await import('./services/claude/message-service.js');
   claudeSendMessage = messageService.sendMessage;
   claudeSendMessageWithAttachments = messageService.sendMessageWithAttachments;
   claudeGetSlashCommands = messageService.getSlashCommands;
+  claudeGetMcpTools = messageService.getMcpTools;
   console.log('[STARTUP] message-service.js 加载成功');
 
   const sessionService = await import('./services/claude/session-service.js');
@@ -129,6 +130,13 @@ async function handleClaudeCommand(command, args, stdinData) {
       // 获取斜杠命令列表
       const cwd = stdinData?.cwd || args[0] || null;
       await claudeGetSlashCommands(cwd);
+      break;
+    }
+
+    case 'getMcpTools': {
+      // 获取MCP服务器工具列表
+      const cwd = stdinData?.cwd || args[0] || null;
+      await claudeGetMcpTools(cwd);
       break;
     }
 

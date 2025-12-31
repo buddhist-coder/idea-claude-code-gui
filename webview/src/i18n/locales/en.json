@@ -340,6 +340,7 @@
     "added": "Added",
     "linkCopied": "Link copied, please open in browser",
     "copyFailed": "Copy failed, please copy manually",
+    "noTools": "No tools available",
     "presets": {
       "fetch": "Web content fetching tool for scraping web pages",
       "time": "Time and timezone utilities",

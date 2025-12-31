@@ -28,14 +28,14 @@ import { loadAttachments, buildContentBlocks } from './attachment-service.js';
 			    const rawError = error?.message || String(error);
 			    const errorName = error?.name || 'Error';
 			    const errorStack = error?.stack || null;
-	
+
 			    // 之前这里对 AbortError / "Claude Code process aborted by user" 做了超时提示
 			    // 现在统一走错误处理逻辑，但仍然在 details 中记录是否为超时/中断类错误，方便排查
 			    const isAbortError =
 			      errorName === 'AbortError' ||
 			      rawError.includes('Claude Code process aborted by user') ||
 			      rawError.includes('The operation was aborted');
-	
+
 		    const settings = loadClaudeSettings();
 	    const env = settings?.env || {};
 
@@ -77,11 +77,11 @@ import { loadAttachments, buildContentBlocks } from './attachment-service.js';
 		    } else {
 		      baseUrlSource = '默认值（https://api.anthropic.com）';
 		    }
-		
+
 		    const heading = isAbortError
 		      ? 'Claude Code 运行被中断（可能是响应超时或用户取消）：'
 		      : 'Claude Code 出现错误：';
-		
+
 		    const userMessage = [
 	      heading,
 	      `- 错误信息: ${rawError}`,
@@ -281,19 +281,19 @@ export async function sendMessage(message, resumeSessionId = null, cwd = null, p
     }
 
 	    console.log('[DEBUG] Query started, waiting for messages...');
-	
+
 	    // 调用 query 函数
 	    const result = query({
 	      prompt: message,
 	      options
 	    });
-	
+
 		// 设置 60 秒超时，超时后通过 AbortController 取消查询（已发现严重问题，暂时注释掉自动超时逻辑）
 		// timeoutId = setTimeout(() => {
 		//   console.log('[DEBUG] Query timeout after 60 seconds, aborting...');
 		//   abortController.abort();
 		// }, 60000);
-	
+
 	    console.log('[DEBUG] Starting message loop...');
 
     let currentSessionId = resumeSessionId;
@@ -390,7 +390,7 @@ export async function sendMessage(message, resumeSessionId = null, cwd = null, p
 	      success: true,
 	      sessionId: currentSessionId
 	    }));
-	
+
 	  } catch (error) {
 	    const payload = buildConfigErrorPayload(error);
 	    console.error('[SEND_ERROR]', JSON.stringify(payload));
@@ -796,7 +796,7 @@ export async function sendMessageWithAnthropicSDK(message, resumeSessionId, cwd,
 	      options.resume = resumeSessionId;
 	      console.log('[RESUMING]', resumeSessionId);
 	    }
-	
+
 		    const result = query({
 		      prompt: inputStream,
 		      options
@@ -807,7 +807,7 @@ export async function sendMessageWithAnthropicSDK(message, resumeSessionId, cwd,
 	    //   console.log('[DEBUG] Query with attachments timeout after 30 seconds, aborting...');
 	    //   abortController.abort();
 	    // }, 30000);
-	
+
 		    let currentSessionId = resumeSessionId;
 
 		    try {
@@ -964,3 +964,246 @@ export async function getSlashCommands(cwd = null) {
     }));
   }
 }
+
+
+/**
+ * 使用 MCP SDK 直接连接服务器获取工具信息（包括描述）
+ */
+async function getMcpToolsFromServer(serverName, serverConfig) {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+
+  try {
+    const transport = new StdioClientTransport({
+      command: serverConfig.command,
+      args: serverConfig.args || [],
+      env: { ...process.env, ...(serverConfig.env || {}) }
+    });
+
+    const client = new Client({
+      name: 'claude-code-gui',
+      version: '1.0.0'
+    }, {
+      capabilities: {}
+    });
+
+    await client.connect(transport);
+
+    // 获取工具列表
+    const toolsResult = await client.listTools();
+    const tools = (toolsResult.tools || []).map(tool => ({
+      name: tool.name,
+      fullName: `mcp__${serverName}__${tool.name}`,
+      description: tool.description || ''
+    }));
+
+    await client.close();
+
+    return tools;
+  } catch (error) {
+    console.log(`[DEBUG] Failed to get tools from ${serverName}: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * 读取 MCP 服务器配置
+ */
+async function readMcpConfig() {
+  const fs = await import('fs');
+  const path = await import('path');
+  const os = await import('os');
+
+  const homeDir = os.homedir();
+  const claudeJsonPath = path.join(homeDir, '.claude.json');
+
+  try {
+    const content = fs.readFileSync(claudeJsonPath, 'utf-8');
+    const config = JSON.parse(content);
+    return config.mcpServers || {};
+  } catch (error) {
+    console.log('[DEBUG] Failed to read MCP config:', error.message);
+    return {};
+  }
+}
+
+/**
+ * 获取MCP服务器的工具列表
+ * 通过初始化SDK并获取系统消息来获取MCP工具信息
+ * 然后使用 MCP SDK 直接连接服务器获取工具描述
+ */
+export async function getMcpTools(cwd = null) {
+  try {
+    process.env.CLAUDE_CODE_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-ts';
+
+    // 设置 API Key
+    setupApiKey();
+
+    // 确保 HOME 环境变量设置正确
+    if (!process.env.HOME) {
+      const os = await import('os');
+      process.env.HOME = os.homedir();
+    }
+
+    // 智能确定工作目录
+    const workingDirectory = selectWorkingDirectory(cwd);
+    try {
+      process.chdir(workingDirectory);
+    } catch (chdirError) {
+      console.error('[WARNING] Failed to change process.cwd():', chdirError.message);
+    }
+
+    // 用于收集MCP服务器信息
+    let mcpServersInfo = [];
+    let allTools = [];
+    let gotInitMessage = false;
+
+    // 使用 AbortController 来控制超时
+    const abortController = new AbortController();
+    const TIMEOUT_MS = 30000; // 30秒超时
+    const timeoutId = setTimeout(() => {
+      console.log('[DEBUG] getMcpTools timeout, aborting...');
+      abortController.abort();
+    }, TIMEOUT_MS);
+
+    // 调用 query 函数，发送一个简单的消息来触发 SDK 初始化
+    const result = query({
+      prompt: '列出所有可用的工具',  // 发送一个简单消息触发初始化
+      options: {
+        cwd: workingDirectory,
+        permissionMode: 'default',
+        maxTurns: 1,  // 只需要1轮
+        abortController: abortController,
+        canUseTool: async () => ({
+          behavior: 'deny',
+          message: 'Config loading only'
+        }),
+        // 明确启用默认工具集
+        tools: { type: 'preset', preset: 'claude_code' },
+        settingSources: ['user', 'project', 'local'],
+        // 捕获 SDK stderr 调试日志
+        stderr: (data) => {
+          if (data && data.trim()) {
+            console.log(`[SDK-STDERR] ${data.trim()}`);
+          }
+        }
+      }
+    });
+
+    // 遍历消息获取系统初始化信息
+    try {
+      for await (const msg of result) {
+        console.log('[DEBUG] getMcpTools received message type:', msg.type, msg.subtype || '');
+
+        if (msg.type === 'system' && msg.subtype === 'init') {
+          // 获取MCP服务器信息
+          if (msg.mcp_servers && Array.isArray(msg.mcp_servers)) {
+            mcpServersInfo = msg.mcp_servers;
+            console.log('[DEBUG] Found mcp_servers:', JSON.stringify(mcpServersInfo));
+          }
+          // 获取所有工具列表
+          if (msg.tools && Array.isArray(msg.tools)) {
+            allTools = msg.tools;
+            console.log('[DEBUG] Found tools count:', allTools.length);
+          }
+
+          gotInitMessage = true;
+          // 获取到 init 消息后，中止查询
+          abortController.abort();
+          break;
+        }
+      }
+    } catch (iterError) {
+      // 忽略迭代错误（包括 abort 导致的错误）
+      if (iterError.name !== 'AbortError') {
+        console.log('[DEBUG] Iterator ended:', iterError.message);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    // 清理资源
+    try {
+      await result.return?.();
+    } catch (cleanupError) {
+      // 忽略清理错误
+    }
+
+    // 读取 MCP 配置
+    const mcpConfig = await readMcpConfig();
+    console.log('[DEBUG] MCP config servers:', Object.keys(mcpConfig).join(', '));
+
+    // 使用 MCP SDK 直接连接每个服务器获取工具信息（包括描述）
+    const mcpToolsMap = {};
+
+    for (const serverInfo of mcpServersInfo) {
+      const serverName = serverInfo.name;
+      const serverConfig = mcpConfig[serverName];
+
+      if (serverConfig && serverConfig.command) {
+        console.log(`[DEBUG] Getting tools from ${serverName} via MCP SDK...`);
+        try {
+          const tools = await getMcpToolsFromServer(serverName, serverConfig);
+          if (tools.length > 0) {
+            mcpToolsMap[serverName] = tools;
+            console.log(`[DEBUG] Got ${tools.length} tools from ${serverName}`);
+          }
+        } catch (error) {
+          console.log(`[DEBUG] Failed to get tools from ${serverName}: ${error.message}`);
+        }
+      }
+    }
+
+    // 如果 MCP SDK 获取失败，回退到从 SDK init 消息解析
+    for (const toolName of allTools) {
+      if (toolName.startsWith('mcp__')) {
+        const parts = toolName.split('__');
+        if (parts.length >= 3) {
+          const serverName = parts[1];
+          const actualToolName = parts.slice(2).join('__');
+
+          // 只有当该服务器没有通过 MCP SDK 获取到工具时才添加
+          if (!mcpToolsMap[serverName]) {
+            mcpToolsMap[serverName] = [];
+          }
+
+          // 检查是否已经存在该工具
+          const exists = mcpToolsMap[serverName].some(t => t.name === actualToolName);
+          if (!exists) {
+            mcpToolsMap[serverName].push({
+              name: actualToolName,
+              fullName: toolName,
+              description: ''  // 回退时没有描述
+            });
+          }
+        }
+      }
+    }
+
+    // 构建结果
+    const mcpServersWithTools = mcpServersInfo.map(server => ({
+      name: server.name,
+      status: server.status,
+      tools: mcpToolsMap[server.name] || []
+    }));
+
+    console.log('[MCP_TOOLS]', JSON.stringify(mcpServersWithTools));
+
+    console.log(JSON.stringify({
+      success: true,
+      gotInitMessage: gotInitMessage,
+      mcpServers: mcpServersWithTools,
+      allTools: allTools
+    }));
+
+  } catch (error) {
+    console.error('[GET_MCP_TOOLS_ERROR]', error.message);
+    console.log('[MCP_TOOLS]', JSON.stringify([]));
+    console.log(JSON.stringify({
+      success: false,
+      error: error.message,
+      mcpServers: []
+    }));
+  }
+}
+

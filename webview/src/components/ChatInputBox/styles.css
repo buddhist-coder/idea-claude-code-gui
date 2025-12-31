@@ -523,7 +523,8 @@
   gap: 4px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  /* 注意：不能使用 overflow: hidden，否则会裁剪掉向上弹出的下拉菜单 */
+  overflow: visible;
 }
 
 .button-area-right {

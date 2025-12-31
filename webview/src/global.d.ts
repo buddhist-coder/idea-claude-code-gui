@@ -130,6 +130,11 @@ interface Window {
   updateMcpServers?: (json: string) => void;
 
   /**
+   * Update MCP servers list with tools information
+   */
+  updateMcpServersWithTools?: (json: string) => void;
+
+  /**
    * Update providers list
    */
   updateProviders?: (json: string) => void;

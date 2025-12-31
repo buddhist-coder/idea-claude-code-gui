@@ -1,6 +1,8 @@
 package com.github.claudecodegui.handler;
 
+import com.github.claudecodegui.ClaudeSDKBridge;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -18,11 +20,14 @@ public class McpServerHandler extends BaseMessageHandler {
 
     private static final String[] SUPPORTED_TYPES = {
         "get_mcp_servers",
+        "get_mcp_tools",
         "add_mcp_server",
         "update_mcp_server",
         "delete_mcp_server",
         "validate_mcp_server"
     };
+
+    private final ClaudeSDKBridge sdkBridge = new ClaudeSDKBridge();
 
     public McpServerHandler(HandlerContext context) {
         super(context);
@@ -38,6 +43,9 @@ public class McpServerHandler extends BaseMessageHandler {
         switch (type) {
             case "get_mcp_servers":
                 handleGetMcpServers();
+                return true;
+            case "get_mcp_tools":
+                handleGetMcpTools(content);
                 return true;
             case "add_mcp_server":
                 handleAddMcpServer(content);
@@ -70,6 +78,86 @@ public class McpServerHandler extends BaseMessageHandler {
             });
         } catch (Exception e) {
             LOG.error("[McpServerHandler] Failed to get MCP servers: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 获取 MCP 服务器的工具列表
+     * 通过 Claude SDK 初始化获取所有 MCP 服务器及其工具信息
+     */
+    private void handleGetMcpTools(String content) {
+        try {
+            Gson gson = new Gson();
+            JsonObject json = content != null && !content.isEmpty()
+                ? gson.fromJson(content, JsonObject.class)
+                : new JsonObject();
+            String cwd = json.has("cwd") ? json.get("cwd").getAsString() : null;
+
+            LOG.info("[McpServerHandler] Getting MCP tools, cwd=" + cwd);
+
+            // 异步获取 MCP 工具信息
+            sdkBridge.getMcpTools(cwd).thenAccept(mcpServersWithTools -> {
+                try {
+                    LOG.info("[McpServerHandler] SDK returned " + mcpServersWithTools.size() + " MCP servers");
+
+                    // 获取配置文件中的服务器列表
+                    List<JsonObject> configServers = context.getSettingsService().getMcpServers();
+                    LOG.info("[McpServerHandler] Config has " + configServers.size() + " servers");
+
+                    // 将工具信息合并到配置服务器中
+                    for (JsonObject configServer : configServers) {
+                        String serverId = configServer.has("id") ? configServer.get("id").getAsString() : "";
+                        String serverName = configServer.has("name")
+                            ? configServer.get("name").getAsString()
+                            : serverId;
+
+                        LOG.info("[McpServerHandler] Looking for match: id=" + serverId + ", name=" + serverName);
+
+                        // 在 SDK 返回的结果中查找匹配的服务器
+                        boolean matched = false;
+                        for (JsonObject sdkServer : mcpServersWithTools) {
+                            String sdkServerName = sdkServer.has("name")
+                                ? sdkServer.get("name").getAsString()
+                                : "";
+
+                            LOG.info("[McpServerHandler] Comparing with SDK server: " + sdkServerName);
+
+                            // 匹配服务器名称（可能是 id 或 name）
+                            if (sdkServerName.equals(serverId) || sdkServerName.equals(serverName)) {
+                                matched = true;
+                                // 添加状态信息
+                                if (sdkServer.has("status")) {
+                                    configServer.addProperty("status", sdkServer.get("status").getAsString());
+                                }
+                                // 添加工具列表
+                                if (sdkServer.has("tools")) {
+                                    configServer.add("tools", sdkServer.get("tools"));
+                                    int toolCount = sdkServer.get("tools").getAsJsonArray().size();
+                                    LOG.info("[McpServerHandler] Matched! Added " + toolCount + " tools");
+                                }
+                                break;
+                            }
+                        }
+                        if (!matched) {
+                            LOG.info("[McpServerHandler] No match found for server: " + serverId);
+                        }
+                    }
+
+                    String serversJson = gson.toJson(configServers);
+                    LOG.info("[McpServerHandler] MCP tools merged, servers count=" + configServers.size());
+
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        callJavaScript("window.updateMcpServersWithTools", escapeJs(serversJson));
+                    });
+                } catch (Exception e) {
+                    LOG.error("[McpServerHandler] Failed to merge MCP tools: " + e.getMessage(), e);
+                }
+            }).exceptionally(e -> {
+                LOG.error("[McpServerHandler] Failed to get MCP tools: " + e.getMessage(), e);
+                return null;
+            });
+        } catch (Exception e) {
+            LOG.error("[McpServerHandler] Failed to parse get_mcp_tools request: " + e.getMessage(), e);
         }
     }
 
