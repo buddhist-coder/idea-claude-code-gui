@@ -122,8 +122,8 @@ public class McpServerHandler extends BaseMessageHandler {
 
                             LOG.info("[McpServerHandler] Comparing with SDK server: " + sdkServerName);
 
-                            // 匹配服务器名称（可能是 id 或 name）
-                            if (sdkServerName.equals(serverId) || sdkServerName.equals(serverName)) {
+                            // 使用灵活的匹配策略
+                            if (matchServerNames(sdkServerName, serverId, serverName)) {
                                 matched = true;
                                 // 添加状态信息
                                 if (sdkServer.has("status")) {
@@ -159,6 +159,59 @@ public class McpServerHandler extends BaseMessageHandler {
         } catch (Exception e) {
             LOG.error("[McpServerHandler] Failed to parse get_mcp_tools request: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 规范化服务器名称用于匹配
+     * 移除连字符、下划线、空格，并转换为小写
+     */
+    private String normalizeServerName(String name) {
+        if (name == null || name.isEmpty()) {
+            return "";
+        }
+        return name.toLowerCase().replaceAll("[-_\\s]", "");
+    }
+
+    /**
+     * 灵活匹配服务器名称
+     * 支持精确匹配、忽略大小写匹配、规范化匹配和部分匹配
+     */
+    private boolean matchServerNames(String sdkName, String configId, String configName) {
+        if (sdkName == null || sdkName.isEmpty()) {
+            return false;
+        }
+
+        // 1. 精确匹配
+        if (sdkName.equals(configId) || sdkName.equals(configName)) {
+            LOG.info("[McpServerHandler] Exact match found");
+            return true;
+        }
+
+        // 2. 忽略大小写匹配
+        if (sdkName.equalsIgnoreCase(configId) || sdkName.equalsIgnoreCase(configName)) {
+            LOG.info("[McpServerHandler] Case-insensitive match found");
+            return true;
+        }
+
+        // 3. 规范化名称匹配
+        String normalizedSdk = normalizeServerName(sdkName);
+        String normalizedId = normalizeServerName(configId);
+        String normalizedName = normalizeServerName(configName);
+
+        if (normalizedSdk.equals(normalizedId) || normalizedSdk.equals(normalizedName)) {
+            LOG.info("[McpServerHandler] Normalized match found: " + normalizedSdk);
+            return true;
+        }
+
+        // 4. 部分匹配（处理名称前缀/后缀差异）
+        if (!normalizedSdk.isEmpty() && !normalizedId.isEmpty()) {
+            if (normalizedSdk.contains(normalizedId) || normalizedId.contains(normalizedSdk)) {
+                LOG.info("[McpServerHandler] Partial match found between: " + normalizedSdk + " and " + normalizedId);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

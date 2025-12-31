@@ -1136,14 +1136,48 @@ export async function getMcpTools(cwd = null) {
     // 使用 MCP SDK 直接连接每个服务器获取工具信息（包括描述）
     const mcpToolsMap = {};
 
+    // 辅助函数：规范化服务器名称用于匹配
+    const normalizeServerName = (name) => {
+      if (!name) return '';
+      return name.toLowerCase().replace(/[-_\s]/g, '');
+    };
+
+    // 辅助函数：在配置中查找匹配的服务器配置
+    const findServerConfig = (serverName, config) => {
+      // 1. 精确匹配
+      if (config[serverName]) {
+        return { key: serverName, config: config[serverName] };
+      }
+
+      // 2. 规范化名称匹配
+      const normalizedName = normalizeServerName(serverName);
+      for (const key of Object.keys(config)) {
+        if (normalizeServerName(key) === normalizedName) {
+          console.log(`[DEBUG] Matched server "${serverName}" to config key "${key}" via normalized name`);
+          return { key, config: config[key] };
+        }
+      }
+
+      // 3. 包含匹配（处理名称前缀/后缀差异）
+      for (const key of Object.keys(config)) {
+        if (normalizedName.includes(normalizeServerName(key)) ||
+            normalizeServerName(key).includes(normalizedName)) {
+          console.log(`[DEBUG] Matched server "${serverName}" to config key "${key}" via partial match`);
+          return { key, config: config[key] };
+        }
+      }
+
+      return null;
+    };
+
     for (const serverInfo of mcpServersInfo) {
       const serverName = serverInfo.name;
-      const serverConfig = mcpConfig[serverName];
+      const matchResult = findServerConfig(serverName, mcpConfig);
 
-      if (serverConfig && serverConfig.command) {
+      if (matchResult && matchResult.config && matchResult.config.command) {
         console.log(`[DEBUG] Getting tools from ${serverName} via MCP SDK...`);
         try {
-          const tools = await getMcpToolsFromServer(serverName, serverConfig);
+          const tools = await getMcpToolsFromServer(serverName, matchResult.config);
           if (tools.length > 0) {
             mcpToolsMap[serverName] = tools;
             console.log(`[DEBUG] Got ${tools.length} tools from ${serverName}`);
@@ -1151,6 +1185,8 @@ export async function getMcpTools(cwd = null) {
         } catch (error) {
           console.log(`[DEBUG] Failed to get tools from ${serverName}: ${error.message}`);
         }
+      } else {
+        console.log(`[DEBUG] No config found for server "${serverName}", available configs: ${Object.keys(mcpConfig).join(', ')}`);
       }
     }
 
@@ -1180,11 +1216,39 @@ export async function getMcpTools(cwd = null) {
       }
     }
 
+    // 辅助函数：查找服务器对应的工具列表（支持灵活匹配）
+    const findToolsForServer = (serverName) => {
+      // 1. 精确匹配
+      if (mcpToolsMap[serverName]) {
+        return mcpToolsMap[serverName];
+      }
+
+      // 2. 规范化名称匹配
+      const normalizedName = normalizeServerName(serverName);
+      for (const key of Object.keys(mcpToolsMap)) {
+        if (normalizeServerName(key) === normalizedName) {
+          console.log(`[DEBUG] Found tools for "${serverName}" via normalized match with key "${key}"`);
+          return mcpToolsMap[key];
+        }
+      }
+
+      // 3. 部分匹配
+      for (const key of Object.keys(mcpToolsMap)) {
+        const normalizedKey = normalizeServerName(key);
+        if (normalizedName.includes(normalizedKey) || normalizedKey.includes(normalizedName)) {
+          console.log(`[DEBUG] Found tools for "${serverName}" via partial match with key "${key}"`);
+          return mcpToolsMap[key];
+        }
+      }
+
+      return [];
+    };
+
     // 构建结果
     const mcpServersWithTools = mcpServersInfo.map(server => ({
       name: server.name,
       status: server.status,
-      tools: mcpToolsMap[server.name] || []
+      tools: findToolsForServer(server.name)
     }));
 
     console.log('[MCP_TOOLS]', JSON.stringify(mcpServersWithTools));
